@@ -1,7 +1,7 @@
 {
   "name": "imp-houses-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Bot made for the revival of IMP houses, first working prototype completed Oct 23, 2024",
   "main": "src/index.cjs",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -15,5 +15,14 @@
     "better-sqlite3": "^11.5.0",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.5"
-  }
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Listenorelse/botThatJoinsVC.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Listenorelse/botThatJoinsVC/issues"
+  },
+  "homepage": "https://github.com/Listenorelse/botThatJoinsVC#readme"
 }
