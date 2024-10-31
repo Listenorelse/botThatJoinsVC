@@ -32,6 +32,13 @@ const commands = [
     .setDescription('the user to assign as host')
     .setRequired(true))
     .toJSON(),
+        new SlashCommandBuilder().setName('setpoints')
+    .setDescription('set the point award for the current event')
+    .addNumberOption((option) => 
+    option.setName('points')
+    .setDescription('points to award attendees for this event')
+    .setRequired(true))
+    .toJSON(),
 ];
 
 const rest = new REST({ version: '10'}).setToken(process.env.token);

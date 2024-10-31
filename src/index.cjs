@@ -22,16 +22,16 @@ if member is present in database and event_activity >299, increment correspondin
  stop incrementing
 clear database on slash command
 export database on slash command
-join vc channel on slash command with param field (done oct 22, 2024)
+join vc channel on slash command with param field (all above done oct 22, 2024)
 export database corresponding to userID that send the command (done oct 23, 2024)
 export only selected columns (done oct 23, 2024)
 leaderboard to show top 20 members of each house (done oct 28, 2024)
 give hosts an extra point on event end (when the bot is called to leave the vc) (done oct 28, 2024)
-
+made points given per event customizable, defaults to 1 point per event (done oct 31, 2024 in a yuyuko cosplay)
 */
 // In-memory database or use SQLite
 const db = new Database('eventData.db');
-let house = '';
+let awardpoint;
 
 // Create tables
 db.prepare(`
@@ -40,7 +40,7 @@ db.prepare(`
         username TEXT,
         event_activity INTEGER,
         givepoint INTEGER,
-        house_pts INTEGER,
+        house_pts REAL,
         house TEXT,
         is_host INTEGER
     )
@@ -63,7 +63,6 @@ function assignHouse(userId) {
     
 
 }
-
 const client = new Client({
     intents: [
         IntentsBitField.Flags.Guilds,
@@ -121,9 +120,10 @@ function stopTracking() {
     if (refreshInterval) clearInterval(refreshInterval);
     refreshInterval = null; // Clear the interval ID
 }
+let eventPt = 1;
 function givePts() {
     // Increment house_pts for members whose givepoint is true, and reset event_activity
-    db.prepare('UPDATE members SET house_pts = house_pts + 1, givepoint = 0 WHERE givepoint = 1').run();
+    db.prepare('UPDATE members SET house_pts = house_pts + ?, givepoint = 0 WHERE givepoint = 1').run(awardpoint);
 
     // increment house_pts for host(s), resets hosts afterwards
     db.prepare('UPDATE members SET house_pts = house_pts + 1, is_host = 0 WHERE is_host = 1').run();
@@ -132,6 +132,7 @@ function givePts() {
     db.prepare('UPDATE members SET event_activity = 0').run();
 
     console.log('House points updated and event activity reset.');
+    
 }
 
 client.on('ready', (c) => {
@@ -252,6 +253,13 @@ client.on('interactionCreate', async (interaction) => {
             console.error('Error setting user as host:', error);
             return interaction.reply('There was an error setting the user as host.');
         }
+    }
+    else if(interaction.commandName === 'setpoints'){
+        awardpoint = interaction.options.getNumber('points');
+        if(!awardpoint)
+            interaction.reply('Enter a real number!');
+        else
+            interaction.reply('Points to award this event per attendee updated!');
     }
     
 });
