@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, IntentsBitField, ChannelType, EmbedBuilder, GuildVoiceStates } = require('discord.js');
+const { Client, GatewayIntentBits, IntentsBitField, ChannelType, EmbedBuilder, GuildVoiceStates, setPosition } = require('discord.js');
 const {joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
 const Database = require('better-sqlite3');
 
@@ -27,11 +27,23 @@ export database corresponding to userID that send the command (done oct 23, 2024
 export only selected columns (done oct 23, 2024)
 leaderboard to show top 20 members of each house (done oct 28, 2024)
 give hosts an extra point on event end (when the bot is called to leave the vc) (done oct 28, 2024)
-made points given per event customizable, defaults to 1 point per event (done oct 31, 2024 in a yuyuko cosplay)
+made points given per event customizable, defaults to 1 point per event (done oct 31, 2024 in a yuyuko cosplay, commited 10/31/24)
+
+dev journal:
+10/31/24
+cant fucking believe that i forgot to make the bot respond to people wiht certain roles only
+
 */
 // In-memory database or use SQLite
 const db = new Database('eventData.db');
 let awardpoint;
+const allowedRoles = {
+    makehost: ['Vonamor', 'Minor Nobility'],       // Only 'Admin' or 'Moderator' can use /makehost
+    joinvc: ['Vonamor', 'Minor Nobility'], 
+    leavevc: ['Vonamor', 'Minor Nobility'], 
+    removedata: ['Vonamor'],
+    setpoints: ['Vonamor']
+};
 
 // Create tables
 db.prepare(`
@@ -74,6 +86,12 @@ const client = new Client({
         GatewayIntentBits.GuildMembers
     ],
 });
+
+function hasRole(interaction, requiredRoles) {
+    // Check if the member has any of the required roles
+    const member = interaction.member;
+    return member.roles.cache.some(role => requiredRoles.includes(role.name));
+}
 
 // Function to track members
 function trackMembers(channel) {
@@ -120,7 +138,7 @@ function stopTracking() {
     if (refreshInterval) clearInterval(refreshInterval);
     refreshInterval = null; // Clear the interval ID
 }
-let eventPt = 1;
+
 function givePts() {
     // Increment house_pts for members whose givepoint is true, and reset event_activity
     db.prepare('UPDATE members SET house_pts = house_pts + ?, givepoint = 0 WHERE givepoint = 1').run(awardpoint);
@@ -146,6 +164,11 @@ client.on('interactionCreate', async (interaction) => {
         interaction.reply('hey!');
     }
     else if(interaction.commandName === 'joinvc'){
+        const requiredRoles = allowedRoles.joinvc;
+
+        if (!hasRole(interaction, requiredRoles)) {
+            return interaction.reply("You don't have permission to use this command.");
+        }
         const voiceChannel = interaction.options.getChannel('channel');
         const voiceConnection = joinVoiceChannel({
             channelId: voiceChannel.id,
@@ -156,6 +179,11 @@ client.on('interactionCreate', async (interaction) => {
         interaction.reply('vc joined!');
     }
     else if(interaction.commandName === 'leavevc'){
+        const requiredRoles = allowedRoles.leavevc;
+
+        if (!hasRole(interaction, requiredRoles)) {
+            return interaction.reply("You don't have permission to use this command.");
+        }
         const connection = getVoiceConnection(interaction.guild.id);
         if (connection) {
             connection.destroy(); // Disconnects the bot from the voice channel
@@ -167,8 +195,6 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
     else if(interaction.commandName === 'exportdata'){
-        console.log('Command is right, executing now...');
-
         try {
             // Fetch member from the database
             const userId = interaction.user.id;
@@ -224,10 +250,20 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
     else if(interaction.commandName === 'removedata'){
+        const requiredRoles = allowedRoles.removedata;
+
+        if (!hasRole(interaction, requiredRoles)) {
+            return interaction.reply("You don't have permission to use this command.");
+        }
         db.prepare(`DELETE FROM members`).run();
         return interaction.reply('Database cleared!');
     }
     else if (interaction.commandName === 'makehost') {
+        const requiredRoles = allowedRoles.makehost;
+
+        if (!hasRole(interaction, requiredRoles)) {
+            return interaction.reply("You don't have permission to use this command.");
+        }
         // Assuming the command accepts a user mention (user parameter)
         const user = interaction.options.getUser('user'); // Get the specified user from the command
     
@@ -255,6 +291,11 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
     else if(interaction.commandName === 'setpoints'){
+        const requiredRoles = allowedRoles.setpoints;
+
+        if (!hasRole(interaction, requiredRoles)) {
+            return interaction.reply("You don't have permission to use this command.");
+        }
         awardpoint = interaction.options.getNumber('points');
         if(!awardpoint)
             interaction.reply('Enter a real number!');
