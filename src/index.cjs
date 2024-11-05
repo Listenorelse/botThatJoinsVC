@@ -38,11 +38,11 @@ cant fucking believe that i forgot to make the bot respond to people wiht certai
 const db = new Database('eventData.db');
 let awardpoint;
 const allowedRoles = {
-    makehost: ['Vonamor', 'Minor Nobility'],       // Only 'Admin' or 'Moderator' can use /makehost
-    joinvc: ['Vonamor', 'Minor Nobility'], 
-    leavevc: ['Vonamor', 'Minor Nobility'], 
-    removedata: ['Vonamor'],
-    setpoints: ['Vonamor']
+    makehost: ['The Vonamors', 'The Duma', 'Minor Nobility'],       //only vonamors/duma/minor nob(for now) can use /makehost
+    joinvc: ['The Vonamors', 'The Duma', 'Minor Nobility'], 
+    leavevc: ['The Vonamors', 'The Duma', 'Minor Nobility'], 
+    removedata: ['The Vonamors', 'The Duma', 'Minor Nobility'],
+    setpoints: ['The Vonamors', 'The Duma', 'Minor Nobility']
 };
 
 // Create tables
