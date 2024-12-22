@@ -2,6 +2,7 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, IntentsBitField, ChannelType, EmbedBuilder, GuildVoiceStates, setPosition } = require('discord.js');
 const {joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
 const Database = require('better-sqlite3');
+const {token} = require('./config.json')
 
 //i do not know what the fuck i am doing like seriously help meeeeeee
 //chatgpt is a godsend
@@ -48,18 +49,20 @@ const allowedRoles = {
 // Create tables
 db.prepare(`
     CREATE TABLE IF NOT EXISTS members (
-        user_id TEXT PRIMARY KEY,
-        username TEXT,
+        discord_user_id TEXT PRIMARY KEY,
+        discord_username TEXT,
+        minecraft_username TEXT,
         event_activity INTEGER,
         givepoint INTEGER,
         house_pts REAL,
         house TEXT,
-        is_host INTEGER
+        is_host INTEGER,
+        is_winner INTEGER
     )
 `).run();
 let refreshInterval;
 function assignHouse(userId) {
-    let member = db.prepare('SELECT * FROM members WHERE user_id = ?').get(userId);
+    let member = db.prepare('SELECT * FROM members WHERE discord_user_id = ?').get(userId);
     if(!member){
         //check current count of house
 
@@ -109,24 +112,24 @@ function trackMembers(channel) {
             const username = member.user.username;
 
             // Check if user exists in the database
-            const userRecord = db.prepare('SELECT * FROM members WHERE user_id = ?').get(userId);
+            const userRecord = db.prepare('SELECT * FROM members WHERE discord_user_id = ?').get(userId);
 
             if (!userRecord) {
                 // Add member if not in database
                 assignHouse(userId);
                 console.log(house);
-                db.prepare('INSERT INTO members (user_id, username, event_activity, givepoint, house_pts, house) VALUES (?, ?, ?, ?, ?, ?)')
+                db.prepare('INSERT INTO members (discord_user_id, discord_username, event_activity, givepoint, house_pts, house) VALUES (?, ?, ?, ?, ?, ?)')
                     .run(userId, username, 1, 0, 0, house);
                     
             } else {
                 // If already present, update event_activity
                 if (userRecord.event_activity < 300) {
-                    db.prepare('UPDATE members SET event_activity = event_activity + 1 WHERE user_id = ?').run(userId);
+                    db.prepare('UPDATE members SET event_activity = event_activity + 1 WHERE discord_user_id = ?').run(userId);
                 }
 
                 // If event_activity >= 300, set givepoint to true
                 if (userRecord.event_activity >= 299 && userRecord.givepoint === 0) {
-                    db.prepare('UPDATE members SET givepoint = 1 WHERE user_id = ?').run(userId);
+                    db.prepare('UPDATE members SET givepoint = 1 WHERE discord_user_id = ?').run(userId);
                 }
             }
         });
@@ -146,8 +149,13 @@ function givePts() {
     // increment house_pts for host(s), resets hosts afterwards
     db.prepare('UPDATE members SET house_pts = house_pts + 1, is_host = 0 WHERE is_host = 1').run();
 
+    //increment house_pts for winner(s), resets winners afterwards
+    db.prepare('UPDATE members SET house_pts = house_pts + 1, is_winner = 0 WHERE is_winner = 1').run();
+
     // Reset event_activity for all members
     db.prepare('UPDATE members SET event_activity = 0').run();
+
+
 
     console.log('House points updated and event activity reset.');
     
@@ -198,7 +206,7 @@ client.on('interactionCreate', async (interaction) => {
         try {
             // Fetch member from the database
             const userId = interaction.user.id;
-            const member = db.prepare('SELECT username, house_pts, house FROM members WHERE user_id = ?').get(userId);
+            const member = db.prepare('SELECT username, house_pts, house FROM members WHERE discord_user_id = ?').get(userId);
 
             if (member.length === 0) {
                 return interaction.reply('No members found in the database.');
@@ -273,16 +281,16 @@ client.on('interactionCreate', async (interaction) => {
     
         try {
             // Check if the user is in the database
-            let member = db.prepare('SELECT * FROM members WHERE user_id = ?').get(user.id);
+            let member = db.prepare('SELECT * FROM members WHERE discord_user_id = ?').get(user.id);
     
             if (!member) {
                 // If user doesn't exist, add them as a new member and set them as host
-                db.prepare(`INSERT INTO members (user_id, username, event_activity, givepoint, house_pts, house, is_host)
+                db.prepare(`INSERT INTO members (discord_user_id, username, event_activity, givepoint, house_pts, house, is_host)
                             VALUES (?, ?, 0, 0, 0, 'Unassigned', 1);`).run(user.id, user.username);
                 return interaction.reply(`${user.username} has been added to the database and set as host.`);
             } else {
                 // If user exists, update their host status
-                db.prepare('UPDATE members SET is_host = 1 WHERE user_id = ?').run(user.id);
+                db.prepare('UPDATE members SET is_host = 1 WHERE discord_user_id = ?').run(user.id);
                 return interaction.reply(`${user.username} is now set as host.`);
             }
         } catch (error) {
@@ -302,6 +310,12 @@ client.on('interactionCreate', async (interaction) => {
         else
             interaction.reply('Points to award this event per attendee updated!');
     }
+    else if(interaction.commandName === 'updateign'){
+        let id=interaction.user.id, ign=interaction.options.getString('in_game_name');
+        db.prepare('UPDATE members SET minecraft_username = ? WHERE discord_user_id = ?').run(ign, id);
+
+        interaction.reply(`The minecraft account associated to your discord is now ${ign}.`)
+    }
     
 });
 
@@ -319,4 +333,4 @@ client.on('messageCreate', (msg) => {
 
 });
 
-client.login(process.env.token);
+client.login(token);

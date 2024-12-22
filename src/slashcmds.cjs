@@ -1,6 +1,8 @@
 require('dotenv').config();
 const { REST, Routes, ChannelType, EmbedBuilder, SlashCommandBuilder, VoiceChannel} = require('discord.js')
-
+const {token} = require('./config.json')
+const client_id = '1296169308296319049';
+const guild_id = '154262039487840256';
 const commands = [
         new SlashCommandBuilder().setName('sayhey')
     .setDescription('replies to slash with hey')
@@ -39,18 +41,25 @@ const commands = [
     .setDescription('points to award attendees for this event')
     .setRequired(true))
     .toJSON(),
+        new SlashCommandBuilder().setName('updateign')
+    .setDescription('set the minecraft username associated to your discord account')
+    .addStringOption((option) => 
+    option.setName('in_game_name')
+    .setDescription('your minecraft username, make NO typos, please.')
+    .setRequired(true))
+    .toJSON(),
 ];
 
-const rest = new REST({ version: '10'}).setToken(process.env.token);
+const rest = new REST({ version: '10'}).setToken(token);
 
 (async () => {
     try{
         console.log('registering slash commands...');
 
         await rest.put(
-            Routes.applicationGuildCommands(process.env.client_id, process.env.IMP_id),
+            Routes.applicationGuildCommands(client_id, guild_id),
             {body: commands}
-        )
+        );
 
         console.log('slash commands registering successful!');
     }catch(error){
