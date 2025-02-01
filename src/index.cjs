@@ -2,7 +2,8 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, IntentsBitField, ChannelType, EmbedBuilder, GuildVoiceStates, setPosition } = require('discord.js');
 const {joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
 const mysql = require('mysql2');
-const {token, dbConfig} = require('./config.json')
+const {token, dbConfig} = require('./config.json');
+const pool = require("./db");
 
 //i do not know what the fuck i am doing like seriously help meeeeeee
 //chatgpt is a godsend
@@ -204,47 +205,56 @@ function extractUsernames(messageContent) {
 async function processRaidCompletion(minecraftUsername, message) {
     let connection;
     try {
-        connection = await mysql.createConnection(dbConfig);
+        // ✅ Connect to REMOTE MySQL database
+        connection = await pool.getConnection();
 
-        // **🔍 Check if user exists in the database**
+        // **🔍 Check if user exists in the remote database**
         const [rows] = await connection.execute(
-            'SELECT * FROM members WHERE minecraft_username = ?',
+            "SELECT discordUserID FROM User WHERE minecraftUsername = ?",
             [minecraftUsername]
         );
 
-        if (rows.length > 0) {
-            // **✅ User exists → Increment g_raids_done**
-            await connection.execute(
-                'UPDATE members SET g_raids_done = g_raids_done + 1 WHERE minecraft_username = ?',
-                [minecraftUsername]
-            );
-            console.log(`Updated g_raids_done for ${minecraftUsername}`);
+        let discordUserID;
+        
+        if (rows.length > 0 && rows[0].discordUserID) {
+            // ✅ User exists → Retrieve their Discord ID
+            discordUserID = rows[0].discordUserID;
+            console.log(`[REMOTE DB] Found: ${minecraftUsername} -> Discord ID: ${discordUserID}`);
         } else {
-            // **❌ User not found → Try to find their Discord ID**
-            let discordUser = await findDiscordUserByUsername(minecraftUsername, message.guild);
+            // ❌ No entry found → Try to find their Discord ID in the Discord guild
+            const discordUser = await findDiscordUserByUsername(minecraftUsername, message.guild);
+
             if (discordUser) {
-                // **🆕 Insert new user into the database**
+                discordUserID = discordUser.id;
+
+                // **🆕 Insert new user into the REMOTE database**
                 await connection.execute(
-                    `INSERT INTO members (minecraft_username, discord_user_id, discord_username, g_raids_done) 
-                     VALUES (?, ?, ?, ?)`,
-                    [minecraftUsername, discordUser.id, discordUser.username, 1]
+                    "INSERT INTO User (minecraftUsername, discordUserID) VALUES (?, ?)",
+                    [minecraftUsername, discordUserID]
                 );
-                console.log(`Added new user: ${minecraftUsername} (Discord: ${discordUser.username})`);
+                console.log(`[REMOTE DB] New user added: ${minecraftUsername} -> Discord ID: ${discordUserID}`);
+            } else {
+                console.log(`[REMOTE DB] ❌ No Discord match found for ${minecraftUsername}`);
+                return;
             }
         }
+
+        // ✅ **Update raid completion count in REMOTE database**
+        await connection.execute(
+            "UPDATE User SET g_raids_done = g_raids_done + 1 WHERE minecraftUsername = ?",
+            [minecraftUsername]
+        );
+
+        console.log(`[REMOTE DB] Raid completion updated for ${minecraftUsername}`);
+
     } catch (error) {
-        console.error(`Error processing raid completion for ${minecraftUsername}:`, error);
+        console.error(`[REMOTE DB] Error processing raid completion for ${minecraftUsername}:`, error);
     } finally {
-        if (connection) await connection.end();
+        if (connection) await connection.release(); // Always release DB connection
     }
 }
 
 // **🔎 Find a Discord user by their Minecraft username**
-async function findDiscordUserByUsername(minecraftUsername, guild) {
-    return guild.members.cache.find(
-        member => member.nickname === minecraftUsername || member.user.username === minecraftUsername
-    );
-}
 
 
 client.on('ready', (c) => {
@@ -421,8 +431,12 @@ client.on('interactionCreate', async (interaction) => {
 
 // Listen for messages in the specified channel
 client.on('messageCreate', async (message) => {
-    if (message.channel.name !== 'raid-completions' || !message.author.bot) return;
-
+    if (message.channel.name !== 'raid-completions' || !message.author.bot){
+        if(message.channel.name === 'raid-completions') console.log('non bot message');
+        return;
+    }
+    console.log('bot message recieved!');
+       console.log(message.content);
     // Extract player names from the bot message
     const playerNames = extractUsernames(message.content);
 
