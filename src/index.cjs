@@ -2,7 +2,7 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, IntentsBitField, ChannelType, EmbedBuilder, GuildVoiceStates, setPosition } = require('discord.js');
 const {joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
 const mysql = require('mysql2');
-const {token, DBhost} = require('./config.json')
+const {token, dbConfig} = require('./config.json')
 
 //i do not know what the fuck i am doing like seriously help meeeeeee
 //chatgpt is a godsend
@@ -37,8 +37,7 @@ cant fucking believe that i forgot to make the bot respond to people wiht certai
 
 
 */
-// In-memory database or use SQLite
-const db = new Database('eventData.db');
+
 let awardpoint;
 const allowedRoles = {
     makehost: ['The Vonamors', 'The Duma', 'Minor Nobility'],       //only vonamors/duma/minor nob(for now) can use /makehost
@@ -53,10 +52,11 @@ const allowedRoles = {
 // Create tables
 
 const connection = mysql.createConnection({
-    host: 'your_host',
-    user: 'your_user',
-    password: 'your_password',
-    database: 'your_database'
+    host: 'localhost',
+    user: 'root',
+    password: 'Factions101',
+    port: 3306,
+    database: 'eventData'
 });
 
 const query = `
@@ -173,6 +173,79 @@ async function givePts(connection, awardpoint) {
 
     console.log('House points updated and event activity reset.');
 }
+
+const RAID_CHANNEL = 'raid-completions';
+
+// **🛠️ Listen for messages in #raid-completions**
+client.on('messageCreate', async (message) => {
+    // Ignore messages not from the bot or from the wrong channel
+    if (message.channel.name !== RAID_CHANNEL || !message.author.bot) return;
+
+    // Extract player names
+    const playerNames = extractUsernames(message.content);
+
+    // Process each player
+    for (const username of playerNames) {
+        await processRaidCompletion(username, message);
+    }
+});
+
+// **🔎 Extract Minecraft usernames from the message**
+function extractUsernames(messageContent) {
+    const regex = /Player \d+: (\w+)/g;
+    let match, players = [];
+    while ((match = regex.exec(messageContent)) !== null) {
+        players.push(match[1]);
+    }
+    return players;
+}
+
+// **🚀 Process each raid completion**
+async function processRaidCompletion(minecraftUsername, message) {
+    let connection;
+    try {
+        connection = await mysql.createConnection(dbConfig);
+
+        // **🔍 Check if user exists in the database**
+        const [rows] = await connection.execute(
+            'SELECT * FROM members WHERE minecraft_username = ?',
+            [minecraftUsername]
+        );
+
+        if (rows.length > 0) {
+            // **✅ User exists → Increment g_raids_done**
+            await connection.execute(
+                'UPDATE members SET g_raids_done = g_raids_done + 1 WHERE minecraft_username = ?',
+                [minecraftUsername]
+            );
+            console.log(`Updated g_raids_done for ${minecraftUsername}`);
+        } else {
+            // **❌ User not found → Try to find their Discord ID**
+            let discordUser = await findDiscordUserByUsername(minecraftUsername, message.guild);
+            if (discordUser) {
+                // **🆕 Insert new user into the database**
+                await connection.execute(
+                    `INSERT INTO members (minecraft_username, discord_user_id, discord_username, g_raids_done) 
+                     VALUES (?, ?, ?, ?)`,
+                    [minecraftUsername, discordUser.id, discordUser.username, 1]
+                );
+                console.log(`Added new user: ${minecraftUsername} (Discord: ${discordUser.username})`);
+            }
+        }
+    } catch (error) {
+        console.error(`Error processing raid completion for ${minecraftUsername}:`, error);
+    } finally {
+        if (connection) await connection.end();
+    }
+}
+
+// **🔎 Find a Discord user by their Minecraft username**
+async function findDiscordUserByUsername(minecraftUsername, guild) {
+    return guild.members.cache.find(
+        member => member.nickname === minecraftUsername || member.user.username === minecraftUsername
+    );
+}
+
 
 client.on('ready', (c) => {
     console.log(`✅${c.user.tag} is online.`);
