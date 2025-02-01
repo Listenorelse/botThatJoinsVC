@@ -1,8 +1,8 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, IntentsBitField, ChannelType, EmbedBuilder, GuildVoiceStates, setPosition } = require('discord.js');
 const {joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
-const Database = require('better-sqlite3');
-const {token} = require('./config.json')
+const mysql = require('mysql2');
+const {token, DBhost} = require('./config.json')
 
 //i do not know what the fuck i am doing like seriously help meeeeeee
 //chatgpt is a godsend
@@ -19,7 +19,7 @@ goal:
 join a vc, refresh member data once per sec
 if member is not present in database, create entry and set (event_activity) to 1
 else if member is already present in database, increment event_activity by 1
-if member is present in database and event_activity >299, increment corresponding memeber's (house_pts) and then
+if member is present in database and event_activity >299, increment corresponding memeber's (event_pts) and then
  stop incrementing
 clear database on slash command
 export database on slash command
@@ -29,10 +29,12 @@ export only selected columns (done oct 23, 2024)
 leaderboard to show top 20 members of each house (done oct 28, 2024)
 give hosts an extra point on event end (when the bot is called to leave the vc) (done oct 28, 2024)
 made points given per event customizable, defaults to 1 point per event (done oct 31, 2024 in a yuyuko cosplay, commited 10/31/24)
+scrape a channel for bot messages and take pieces of it to match to the database for usernames
 
 dev journal:
 10/31/24
 cant fucking believe that i forgot to make the bot respond to people wiht certain roles only
+
 
 */
 // In-memory database or use SQLite
@@ -46,37 +48,57 @@ const allowedRoles = {
     setpoints: ['The Vonamors', 'The Duma', 'Minor Nobility']
 };
 
+
+
 // Create tables
-db.prepare(`
+
+const connection = mysql.createConnection({
+    host: 'your_host',
+    user: 'your_user',
+    password: 'your_password',
+    database: 'your_database'
+});
+
+const query = `
     CREATE TABLE IF NOT EXISTS members (
-        discord_user_id TEXT PRIMARY KEY,
-        discord_username TEXT,
-        minecraft_username TEXT,
-        event_activity INTEGER,
-        givepoint INTEGER,
-        house_pts REAL,
-        house TEXT,
-        is_host INTEGER,
-        is_winner INTEGER
+        minecraft_username VARCHAR(255) PRIMARY KEY,
+        discord_username VARCHAR(255),
+        discord_user_id VARCHAR(255),
+        event_activity INT,
+        givepoint INT,
+        event_pts FLOAT,
+        house VARCHAR(255),
+        pts_total INT,
+        g_raids_done FLOAT,
+        is_host TINYINT(1),
+        is_winner TINYINT(1)
     )
-`).run();
-let refreshInterval;
-function assignHouse(userId) {
-    let member = db.prepare('SELECT * FROM members WHERE discord_user_id = ?').get(userId);
-    if(!member){
-        //check current count of house
+`;
 
-        const lantanaCount = db.prepare('SELECT COUNT(*) as count FROM members WHERE house = \'Lantana\'').get().count;
-        const dracaenaCount = db.prepare('SELECT COUNT(*) as count FROM members WHERE house = \'Dracaena\'').get().count;
-
-        // Determine house assignment based on counts
-        house = 'Lantana'; // Default to Lantana if counts are equal
-        if (lantanaCount > dracaenaCount) {
-            house = 'Dracaena';
-        }
+connection.query(query, (err, results) => {
+    if (err) {
+        console.error('Error creating table:', err);
+    } else {
+        console.log('Table created successfully:', results);
     }
-    
+    connection.end();
+});
 
+async function assignHouse(userId, connection) {
+    const [rows] = await connection.execute('SELECT * FROM members WHERE discord_user_id = ?', [userId]);
+    
+    if (rows.length === 0) {
+        // Check current count of houses
+        const [[{ count: lantanaCount }]] = await connection.execute('SELECT COUNT(*) as count FROM members WHERE house = "Lantana"');
+        const [[{ count: dracaenaCount }]] = await connection.execute('SELECT COUNT(*) as count FROM members WHERE house = "Dracaena"');
+
+        // Determine house assignment
+        let house = lantanaCount > dracaenaCount ? 'Dracaena' : 'Lantana';
+        
+        return house;
+    }
+
+    return null; // User already exists
 }
 const client = new Client({
     intents: [
@@ -97,43 +119,44 @@ function hasRole(interaction, requiredRoles) {
 }
 
 // Function to track members
-function trackMembers(channel) {
-    if (refreshInterval) clearInterval(refreshInterval); // Clear any previous tracking intervals
-    
-    refreshInterval = setInterval(() => {
-        // Check if the channel is still valid and has members
+let refreshInterval = null;
+
+async function trackMembers(channel, connection) {
+    if (refreshInterval) clearInterval(refreshInterval);
+
+    refreshInterval = setInterval(async () => {
         if (!channel || !channel.members) {
             console.log('Channel or members list is not accessible.');
             return;
         }
 
-        channel.members.forEach(member => { // Make sure channel.members is valid
+        for (const member of channel.members.values()) {
             const userId = member.user.id;
             const username = member.user.username;
 
-            // Check if user exists in the database
-            const userRecord = db.prepare('SELECT * FROM members WHERE discord_user_id = ?').get(userId);
+            const [rows] = await connection.execute('SELECT * FROM members WHERE discord_user_id = ?', [userId]);
 
-            if (!userRecord) {
-                // Add member if not in database
-                assignHouse(userId);
+            if (rows.length === 0) {
+                const house = await assignHouse(userId, connection);
                 console.log(house);
-                db.prepare('INSERT INTO members (discord_user_id, discord_username, event_activity, givepoint, house_pts, house) VALUES (?, ?, ?, ?, ?, ?)')
-                    .run(userId, username, 1, 0, 0, house);
-                    
+
+                await connection.execute(
+                    'INSERT INTO members (discord_user_id, discord_username, event_activity, givepoint, event_pts, house) VALUES (?, ?, ?, ?, ?, ?)',
+                    [userId, username, 1, 0, 0, house]
+                );
             } else {
-                // If already present, update event_activity
+                const userRecord = rows[0];
+
                 if (userRecord.event_activity < 300) {
-                    db.prepare('UPDATE members SET event_activity = event_activity + 1 WHERE discord_user_id = ?').run(userId);
+                    await connection.execute('UPDATE members SET event_activity = event_activity + 1 WHERE discord_user_id = ?', [userId]);
                 }
 
-                // If event_activity >= 300, set givepoint to true
                 if (userRecord.event_activity >= 299 && userRecord.givepoint === 0) {
-                    db.prepare('UPDATE members SET givepoint = 1 WHERE discord_user_id = ?').run(userId);
+                    await connection.execute('UPDATE members SET givepoint = 1 WHERE discord_user_id = ?', [userId]);
                 }
             }
-        });
-    }, 1000); // Refresh every 1 second
+        }
+    }, 1000);
 }
 
 //Stop tracking when the bot leaves the voice channel
@@ -142,23 +165,13 @@ function stopTracking() {
     refreshInterval = null; // Clear the interval ID
 }
 
-function givePts() {
-    // Increment house_pts for members whose givepoint is true, and reset event_activity
-    db.prepare('UPDATE members SET house_pts = house_pts + ?, givepoint = 0 WHERE givepoint = 1').run(awardpoint);
-
-    // increment house_pts for host(s), resets hosts afterwards
-    db.prepare('UPDATE members SET house_pts = house_pts + 1, is_host = 0 WHERE is_host = 1').run();
-
-    //increment house_pts for winner(s), resets winners afterwards
-    db.prepare('UPDATE members SET house_pts = house_pts + 1, is_winner = 0 WHERE is_winner = 1').run();
-
-    // Reset event_activity for all members
-    db.prepare('UPDATE members SET event_activity = 0').run();
-
-
+async function givePts(connection, awardpoint) {
+    await connection.execute('UPDATE members SET event_pts = event_pts + ?, givepoint = 0 WHERE givepoint = 1', [awardpoint]);
+    await connection.execute('UPDATE members SET event_pts = event_pts + 1, is_host = 0 WHERE is_host = 1');
+    await connection.execute('UPDATE members SET event_pts = event_pts + 1, is_winner = 0 WHERE is_winner = 1');
+    await connection.execute('UPDATE members SET event_activity = 0');
 
     console.log('House points updated and event activity reset.');
-    
 }
 
 client.on('ready', (c) => {
@@ -167,170 +180,183 @@ client.on('ready', (c) => {
 
 client.on('interactionCreate', async (interaction) => {
     console.log(interaction.user.id);
-    if(!interaction.isCommand()) return;
-    if(interaction.commandName === 'sayhey'){
-        interaction.reply('hey!');
-    }
-    else if(interaction.commandName === 'joinvc'){
-        const requiredRoles = allowedRoles.joinvc;
 
-        if (!hasRole(interaction, requiredRoles)) {
-            return interaction.reply("You don't have permission to use this command.");
-        }
-        const voiceChannel = interaction.options.getChannel('channel');
-        const voiceConnection = joinVoiceChannel({
-            channelId: voiceChannel.id,
-            guildId: interaction.guild.id,
-            adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-        });
-        trackMembers(voiceChannel);
-        interaction.reply('vc joined!');
-    }
-    else if(interaction.commandName === 'leavevc'){
-        const requiredRoles = allowedRoles.leavevc;
+    if (!interaction.isCommand()) return;
 
-        if (!hasRole(interaction, requiredRoles)) {
-            return interaction.reply("You don't have permission to use this command.");
+    const connection = await pool.getConnection();
+
+    try {
+        if (interaction.commandName === 'sayhey') {
+            return interaction.reply('hey!');
         }
-        const connection = getVoiceConnection(interaction.guild.id);
-        if (connection) {
-            connection.destroy(); // Disconnects the bot from the voice channel
+
+        else if (interaction.commandName === 'joinvc') {
+            const requiredRoles = allowedRoles.joinvc;
+
+            if (!hasRole(interaction, requiredRoles)) {
+                return interaction.reply("You don't have permission to use this command.");
+            }
+
+            const voiceChannel = interaction.options.getChannel('channel');
+
+            if (!voiceChannel || voiceChannel.type !== 'GUILD_VOICE') {
+                return interaction.reply('Please provide a valid voice channel.');
+            }
+
+            joinVoiceChannel({
+                channelId: voiceChannel.id,
+                guildId: interaction.guild.id,
+                adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+            });
+
+            trackMembers(voiceChannel);
+            return interaction.reply('VC joined!');
+        }
+
+        else if (interaction.commandName === 'leavevc') {
+            const requiredRoles = allowedRoles.leavevc;
+
+            if (!hasRole(interaction, requiredRoles)) {
+                return interaction.reply("You don't have permission to use this command.");
+            }
+
+            const connection = getVoiceConnection(interaction.guild.id);
+
+            if (!connection) {
+                return interaction.reply('I am not currently in a VC!');
+            }
+
+            connection.destroy();
             givePts();
             stopTracking();
-            await interaction.reply('Disconnected from the vc!');
-        } else {
-            await interaction.reply('I am not currently in a vc!');
+            return interaction.reply('Disconnected from the VC!');
         }
-    }
-    else if(interaction.commandName === 'exportdata'){
-        try {
-            // Fetch member from the database
-            const userId = interaction.user.id;
-            const member = db.prepare('SELECT username, house_pts, house FROM members WHERE discord_user_id = ?').get(userId);
 
-            if (member.length === 0) {
+        else if (interaction.commandName === 'exportdata') {
+            const userId = interaction.user.id;
+            const [rows] = await connection.execute('SELECT username, event_pts, house FROM members WHERE discord_user_id = ?', [userId]);
+
+            if (rows.length === 0) {
                 return interaction.reply('No members found in the database.');
             }
 
-            // Return the exported database
-            return interaction.reply(`Exported Database:\n${JSON.stringify(member, null, 2)}`)
-        }catch (error) {
-        console.error('Error fetching members from the database:', error);
-        return interaction.reply('There was an error fetching the database.');
-    }
-    }
-    else if(interaction.commandName === 'leaderboard'){
-        try {
-            // Query the top 20 members for Lantana ordered by points
-            const topLantana = db.prepare(`
-                SELECT username, house_pts 
+            return interaction.reply(`Exported Database:\n${JSON.stringify(rows[0], null, 2)}`);
+        }
+
+        else if (interaction.commandName === 'leaderboard') {
+            const [topLantana] = await connection.execute(`
+                SELECT username, event_pts 
                 FROM members 
                 WHERE house = 'Lantana' 
-                ORDER BY house_pts DESC 
+                ORDER BY event_pts DESC 
                 LIMIT 20;
-            `).all();
-    
-            // Query the top 20 members for Dracaena ordered by points
-            const topDracaena = db.prepare(`
-                SELECT username, house_pts 
+            `);
+
+            const [topDracaena] = await connection.execute(`
+                SELECT username, event_pts 
                 FROM members 
                 WHERE house = 'Dracaena' 
-                ORDER BY house_pts DESC 
+                ORDER BY event_pts DESC 
                 LIMIT 20;
-            `).all();
-    
-            // Formatting the output for each house
+            `);
+
             let response = '**Top 20 Members in Lantana by Points:**\n';
             topLantana.forEach((member, index) => {
-                response += `#${index + 1} ${member.username} - ${member.house_pts} points\n`;
+                response += `#${index + 1} ${member.username} - ${member.event_pts} points\n`;
             });
-    
+
             response += '\n**Top 20 Members in Dracaena by Points:**\n';
             topDracaena.forEach((member, index) => {
-                response += `#${index + 1} ${member.username} - ${member.house_pts} points\n`;
+                response += `#${index + 1} ${member.username} - ${member.event_pts} points\n`;
             });
-    
-            // Reply with the result
+
             return interaction.reply(response);
-        } catch (error) {
-            console.error('Error fetching top members:', error);
-            return interaction.reply('There was an error retrieving the top members.');
         }
-    }
-    else if(interaction.commandName === 'removedata'){
-        const requiredRoles = allowedRoles.removedata;
 
-        if (!hasRole(interaction, requiredRoles)) {
-            return interaction.reply("You don't have permission to use this command.");
-        }
-        db.prepare(`DELETE FROM members`).run();
-        return interaction.reply('Database cleared!');
-    }
-    else if (interaction.commandName === 'makehost') {
-        const requiredRoles = allowedRoles.makehost;
+        else if (interaction.commandName === 'removedata') {
+            const requiredRoles = allowedRoles.removedata;
 
-        if (!hasRole(interaction, requiredRoles)) {
-            return interaction.reply("You don't have permission to use this command.");
+            if (!hasRole(interaction, requiredRoles)) {
+                return interaction.reply("You don't have permission to use this command.");
+            }
+
+            await connection.execute('DELETE FROM members');
+            return interaction.reply('Database cleared!');
         }
-        // Assuming the command accepts a user mention (user parameter)
-        const user = interaction.options.getUser('user'); // Get the specified user from the command
-    
-        if (!user) {
-            return interaction.reply('Please specify a user to make host.');
-        }
-    
-        try {
-            // Check if the user is in the database
-            let member = db.prepare('SELECT * FROM members WHERE discord_user_id = ?').get(user.id);
-    
-            if (!member) {
-                // If user doesn't exist, add them as a new member and set them as host
-                db.prepare(`INSERT INTO members (discord_user_id, username, event_activity, givepoint, house_pts, house, is_host)
-                            VALUES (?, ?, 0, 0, 0, 'Unassigned', 1);`).run(user.id, user.username);
+
+        else if (interaction.commandName === 'makehost') {
+            const requiredRoles = allowedRoles.makehost;
+
+            if (!hasRole(interaction, requiredRoles)) {
+                return interaction.reply("You don't have permission to use this command.");
+            }
+
+            const user = interaction.options.getUser('user');
+
+            if (!user) {
+                return interaction.reply('Please specify a user to make host.');
+            }
+
+            const [rows] = await connection.execute('SELECT * FROM members WHERE discord_user_id = ?', [user.id]);
+
+            if (rows.length === 0) {
+                await connection.execute(`
+                    INSERT INTO members (discord_user_id, username, event_activity, givepoint, event_pts, house, is_host)
+                    VALUES (?, ?, 0, 0, 0, 'Unassigned', 1);
+                `, [user.id, user.username]);
+
                 return interaction.reply(`${user.username} has been added to the database and set as host.`);
             } else {
-                // If user exists, update their host status
-                db.prepare('UPDATE members SET is_host = 1 WHERE discord_user_id = ?').run(user.id);
+                await connection.execute('UPDATE members SET is_host = 1 WHERE discord_user_id = ?', [user.id]);
                 return interaction.reply(`${user.username} is now set as host.`);
             }
-        } catch (error) {
-            console.error('Error setting user as host:', error);
-            return interaction.reply('There was an error setting the user as host.');
         }
-    }
-    else if(interaction.commandName === 'setpoints'){
-        const requiredRoles = allowedRoles.setpoints;
 
-        if (!hasRole(interaction, requiredRoles)) {
-            return interaction.reply("You don't have permission to use this command.");
+        else if (interaction.commandName === 'setpoints') {
+            const requiredRoles = allowedRoles.setpoints;
+
+            if (!hasRole(interaction, requiredRoles)) {
+                return interaction.reply("You don't have permission to use this command.");
+            }
+
+            const awardpoint = interaction.options.getNumber('points');
+
+            if (!awardpoint) {
+                return interaction.reply('Enter a real number!');
+            }
+
+            return interaction.reply('Points to award this event per attendee updated!');
         }
-        awardpoint = interaction.options.getNumber('points');
-        if(!awardpoint)
-            interaction.reply('Enter a real number!');
-        else
-            interaction.reply('Points to award this event per attendee updated!');
-    }
-    else if(interaction.commandName === 'updateign'){
-        let id=interaction.user.id, ign=interaction.options.getString('in_game_name');
-        db.prepare('UPDATE members SET minecraft_username = ? WHERE discord_user_id = ?').run(ign, id);
 
-        interaction.reply(`The minecraft account associated to your discord is now ${ign}.`)
+        else if (interaction.commandName === 'updateign') {
+            const id = interaction.user.id;
+            const ign = interaction.options.getString('in_game_name');
+
+            await connection.execute('UPDATE members SET minecraft_username = ? WHERE discord_user_id = ?', [ign, id]);
+
+            return interaction.reply(`The Minecraft account associated with your Discord is now ${ign}.`);
+        }
+    } catch (error) {
+        console.error('Error executing command:', error);
+        interaction.reply('An error occurred while processing the command.');
+    } finally {
+        connection.release(); // Release connection back to pool
     }
-    
 });
 
 
 
-client.on('messageCreate', (msg) => {
-    console.log('   ', msg.author.globalName, ': ');
-    console.log(msg.content);
-    if (msg.author.bot){
-        return;
-    }
-    if (msg.content === 'hello'){
-    }
+// Listen for messages in the specified channel
+client.on('messageCreate', async (message) => {
+    if (message.channel.name !== 'raid-completions' || !message.author.bot) return;
 
+    // Extract player names from the bot message
+    const playerNames = extractUsernames(message.content);
 
+    // Process each player's raid completion
+    for (const username of playerNames) {
+        await processRaidCompletion(username, message);
+    }
 });
 
 client.login(token);

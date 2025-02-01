@@ -1,0 +1,7 @@
+version: '3'
+services:
+  updater:
+    build: .
+    volumes:
+      - ./repo:/app/repo  # Maps local directory to container
+    restart: always
